@@ -1,0 +1,13 @@
+Manifest-Version: 1.0
+Require-Bundle: com.dynatrace.diagnostics.sdk
+Bundle-Vendor: dynaTrace
+Bundle-ClassPath: .,lib/com.ibm.mq.axis2.jar,lib/com.ibm.mq.commonserv
+ ices.jar,lib/com.ibm.mq.headers.jar,lib/com.ibm.mq.jar,lib/com.ibm.mq
+ .jmqi.jar,lib/com.ibm.mq.pcf.jar,lib/com.ibm.mqjms.jar,lib/connector.
+ jar
+Bundle-Version: 2.0.0
+Bundle-Name: Message Flow Statistics Monitor
+Bundle-ManifestVersion: 2
+Bundle-SymbolicName: com.dynatrace.diagnostic.plugins.MessageFlowStati
+ stics;singleton:=true
+

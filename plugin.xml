@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.2"?>
+<!-- plugin.xml file written by dynaTrace Client 4.1.0 -->
+<plugin>
+  <extension point="com.dynatrace.diagnostics.pdk.pluginconfig" id="com.dynatrace.diagnostic.plugins.MessageFlowStatistics" name="Message Flow Statistics Monitor">
+    <information>
+      <category value="" />
+      <description value="My Plugin description ..." />
+      <supportlevel value="unsupported" />
+    </information>
+    <configuration>
+      <property key="qMgr.port" label="Queue Manager TCP Port" type="string" description="My property description ..." default="" />
+      <property key="qMgr.name" label="Queue Manager Name" type="string" description="My property description ..." default="" />
+      <property key="qMgr.channel" label="Server Channel Connection Name" type="string" description="My property description ..." default="" />
+      <property key="qMgr.topic" label="Stats Subscription Topic" type="string" description="My property description ..." default="" />
+      <property key="qmgr.authenticate" label="Authenticate" type="boolean" description="My property description ..." default="false" />
+      <property key="qmgr.userId" label="UserId" type="string" description="My property description ..." default="">
+        <visibility>
+          <rule key="qmgr.authenticate" value="true" />
+        </visibility>
+      </property>
+      <property key="qmgr.passwd" label="Password" type="password" description="My property description ..." default="">
+        <visibility>
+          <rule key="qmgr.authenticate" value="true" />
+        </visibility>
+      </property>
+    </configuration>
+  </extension>
+  <extension point="com.dynatrace.diagnostics.pdk.monitor" id="com.dynatrace.diagnostic.plugins.MessageFlowStatisticsMonitor" name="MessageFlowStatisticsMonitor">
+    <plugin configid="com.dynatrace.diagnostic.plugins.MessageFlowStatistics" class="com.dynatrace.diagnostic.plugins.MessageFlowStatisticsMonitor" />
+  </extension>
+  <extension point="com.dynatrace.diagnostics.pdk.monitormetricgroup" id="com.dynatrace.diagnostic.plugins.MessageFlowStatisticsMonitor.metricgroup1" name="Message Flow Group">
+    <metricgroup monitorid="com.dynatrace.diagnostic.plugins.MessageFlowStatisticsMonitor">
+      <metric defaultrate="purepath" name="TotalNumberOfMessagesWithErrors" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="ElapsedTimeWaitingForInputMessage" unit="ms" description="My metric description ..." />
+      <metric defaultrate="purepath" name="TimesMaximumNumberOfThreadsReached" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="TotalElapsedTime" unit="ms" description="My metric description ..." />
+      <metric defaultrate="purepath" name="MinimumCPUTime" unit="ms" description="My metric description ..." />
+      <metric defaultrate="purepath" name="MaximumElapsedTime" unit="ms" description="My metric description ..." />
+      <metric defaultrate="purepath" name="NumberOfThreadsInPool" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="TotalNumberOfErrorsProcessingMessages" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="CPUTimeWaitingForInputMessage" unit="ms" description="My metric description ..." />
+      <metric defaultrate="purepath" name="TotalNumberOfBackouts" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="MinimumSizeOfInputMessages" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="TotalCPUTime" unit="ms" description="My metric description ..." />
+      <metric defaultrate="purepath" name="TotalInputMessages" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="ElapsedTimePerMessage" unit="ms" description="My metric description ..." />
+      <metric defaultrate="purepath" name="TotalNumberOfMQErrors" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="MaximumCPUTime" unit="ms" description="My metric description ..." />
+      <metric defaultrate="purepath" name="TotalNumberOfCommits" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="TotalNumberOfTimeOutsWaitingForRepliesToAggregateMessages" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="TotalSizeOfInputMessages" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="MinimumElapsedTime" unit="ms" description="My metric description ..." />
+      <metric defaultrate="purepath" name="MaximumSizeOfInputMessages" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="CPUTimePerMessage" unit="ms" description="My metric description ..." />
+    </metricgroup>
+  </extension>
+</plugin>
+
