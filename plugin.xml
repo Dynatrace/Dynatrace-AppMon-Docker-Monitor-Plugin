@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.2"?>
+<!-- plugin.xml file written by dynaTrace Client 6.1.0 -->
+<plugin>
+  <extension point="com.dynatrace.diagnostics.pdk.pluginconfig" id="com.dynatrace.docker.plugin" name="Docker Monitor">
+    <information>
+      <category value="" />
+      <displayname value="Docker Monitor" />
+      <description value="My Plugin description ..." />
+      <supportlevel value="unsupported" />
+    </information>
+    <configuration>
+      <property key="connectionType" label="Connection Type" type="list" description="My property description ..." default="Unix Socket">
+        <list>
+          <item value="Unix Socket" />
+          <item value="TCP Port" />
+        </list>
+      </property>
+      <property key="sshOrLocal" label="SSH or Local" type="list" description="My property description ..." default="SSH">
+        <list>
+          <item value="SSH" />
+          <item value="Local" />
+        </list>
+        <visibility>
+          <rule key="connectionType" value="Unix Socket" />
+        </visibility>
+      </property>
+      <property key="loginUser" label="Login User" type="string" description="My property description ..." default="" multiline="false">
+        <visibility>
+          <rule key="sshOrLocal" value="SSH" />
+        </visibility>
+      </property>
+      <property key="password" label="Password" type="password" description="My property description ..." default="">
+        <visibility>
+          <rule key="sshOrLocal" value="SSH" />
+        </visibility>
+      </property>
+      <property key="dockerPort" label="Docker Port" type="string" description="My property description ..." default="" multiline="false">
+        <visibility>
+          <rule key="connectionType" value="TCP Port" />
+        </visibility>
+      </property>
+    </configuration>
+  </extension>
+  <extension point="com.dynatrace.diagnostics.pdk.monitor" id="com.dynatrace.docker.plugin.monitor" name="Docker Monitor">
+    <plugin configid="com.dynatrace.docker.plugin" class="com.dynatrace.docker.DockerMonitor" />
+  </extension>
+  <extension point="com.dynatrace.diagnostics.pdk.monitormetricgroup" id="com.dynatrace.docker.plugin.monitor.metricgroup1" name="CPUGroup">
+    <metricgroup monitorid="com.dynatrace.docker.plugin.monitor">
+      <metric defaultrate="purepath" name="total_usage" unit="ns" description="My metric description ..." />
+      <metric defaultrate="purepath" name="usage_in_usermode" unit="ns" description="My metric description ..." />
+      <metric defaultrate="purepath" name="system_cpu_usage" unit="ns" description="My metric description ..." />
+      <metric defaultrate="purepath" name="system_cpu_usage_delta" unit="ns" description="My metric description ..." />
+      <metric defaultrate="purepath" name="total_usage_delta" unit="ns" description="My metric description ..." />
+      <metric defaultrate="purepath" name="usage_in_usermode_delta" unit="ns" description="My metric description ..." />
+      <metric defaultrate="purepath" name="cpu_percentage" unit="percent" description="My metric description ..." />
+    </metricgroup>
+  </extension>
+  <extension point="com.dynatrace.diagnostics.pdk.monitormetricgroup" id="com.dynatrace.docker.plugin.monitor.metricgroup2" name="MemoryGroup">
+    <metricgroup monitorid="com.dynatrace.docker.plugin.monitor">
+      <metric defaultrate="purepath" name="usage" unit="bytes" description="My metric description ..." />
+      <metric defaultrate="purepath" name="limit" unit="bytes" description="My metric description ..." />
+      <metric defaultrate="purepath" name="memoryUsage" unit="percent" description="My metric description ..." />
+    </metricgroup>
+  </extension>
+  <extension point="com.dynatrace.diagnostics.pdk.monitormetricgroup" id="com.dynatrace.docker.plugin.monitor.metricgroup3" name="NetworkGroup">
+    <metricgroup monitorid="com.dynatrace.docker.plugin.monitor">
+      <metric defaultrate="purepath" name="rx_bytes" unit="bytes" description="My metric description ..." />
+      <metric defaultrate="purepath" name="tx_bytes" unit="bytes" description="My metric description ..." />
+      <metric defaultrate="purepath" name="rx_packets" unit="bytes" description="My metric description ..." />
+      <metric defaultrate="purepath" name="tx_packets" unit="bytes" description="My metric description ..." />
+      <metric defaultrate="purepath" name="rx_bytes_delta" unit="bytes" description="My metric description ..." />
+      <metric defaultrate="purepath" name="tx_bytes_delta" unit="bytes" description="My metric description ..." />
+      <metric defaultrate="purepath" name="rx_packets_delta" unit="bytes" description="My metric description ..." />
+      <metric defaultrate="purepath" name="tx_packets_delta" unit="bytes" description="My metric description ..." />
+    </metricgroup>
+  </extension>
+  <extension point="com.dynatrace.diagnostics.pdk.monitormetricgroup" id="com.dynatrace.docker.plugin.monitor.metricgroup4" name="CIGroup">
+    <metricgroup monitorid="com.dynatrace.docker.plugin.monitor">
+      <metric defaultrate="purepath" name="containerCount" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="imageCount" unit="number" description="My metric description ..." />
+    </metricgroup>
+  </extension>
+</plugin>
+
