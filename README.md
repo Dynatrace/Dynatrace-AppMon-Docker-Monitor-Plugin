@@ -39,3 +39,5 @@ The monitor can run in three different modes:
 * Unix Socket - Local: By default, docker daemon binds to a Unix socket (/var/run/docker.sock). If the docker daemon is using the default binding, you can collect metrics data from a collector that is running on the same host as the docker deaemon by using the Unix Socket - Local option. There is no need to install Netcat "nc" utility on the host machine.
 
 This monitor plugin works for docker daemon running on any flavor of 64-bit Linux host. 
+
+![DockerDashboard](https://cloud.githubusercontent.com/assets/11229039/8806572/494cc32c-2fa5-11e5-8af4-05a86ffcf266.png "Docker Dashboard")
