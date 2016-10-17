@@ -23,16 +23,13 @@ import ch.ethz.ssh2.Connection;
 import ch.ethz.ssh2.Session;
 
 import com.dynatrace.docker.DockerMonitor;
-//import com.dynatrace.docker.util.IOUtils;
-import com.dynatrace.docker.collector.helper.Pipe;
-import com.dynatrace.docker.collector.helper.PipeOut;
 
 public class UnixSocketDataCollector extends AbstractDataCollector implements DataCollector {
 	private String connectionMode;
 	private String host;
 	private String password;
 	private String user;
-	private static String UNIX_SOCKET_CMD = "echo -e \"GET %s HTTP/1.0\r\n\" | sudo /bin/nc -U /var/run/docker.sock";
+	private static String UNIX_SOCKET_CMD = "echo -e \"GET %s HTTP/1.0\r\n\" | sudo /bin/nc -q -1 -U /var/run/docker.sock";
 //	private static String UNIX_SOCKET_CMD_LOCAL = "echo -e \"GET %s HTTP/1.0\r\n\" | sudo /bin/nc -U /var/run/docker.//sock";
 	private static String UNIX_SOCKET_CMD_LOCAL = "GET %s HTTP/1.0\r\n";
 	private static String SOCKET_FILE = "/var/run/docker.sock";
@@ -196,117 +193,6 @@ public class UnixSocketDataCollector extends AbstractDataCollector implements Da
 		return null;
 	}
 	
-/*	private String getDataLocally(String command, boolean readUnlimited) throws IOException {
-		String updatedCmd = String.format(UNIX_SOCKET_CMD_LOCAL, command);
-		DockerMonitor.log.log(Level.SEVERE, "Command=" + updatedCmd);
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		ByteArrayOutputStream err = new ByteArrayOutputStream();
-
-		String[] execCmd = {"sh", "-c", updatedCmd};
-		ProcessBuilder pbuilder = new ProcessBuilder(execCmd);
-		pbuilder.redirectErrorStream(true);
-		Process child = pbuilder.start();
-
-		InputStream in = child.getInputStream();
-		InputStreamReader ibuf = null;
-		BufferedReader bufR = null;
-		try {
-			ibuf = new InputStreamReader(in);
-			bufR = new BufferedReader(ibuf);
-			String status = bufR.readLine();
-			DockerMonitor.log.log(Level.SEVERE, "Status=" + status);
-			if (status.contains("200 OK")) {
-				int hdrResp = parseHeaders(bufR);
-				if ( hdrResp != 0) {
-					out.write("Error: Failed to parse headers".getBytes());
-				}
-
-				if (readUnlimited)
-				{
-					String line;
-					while ((line = bufR.readLine())!= null)
-					{
-						out.write(line.getBytes());
-					}
-				}
-				else {
-					String line = bufR.readLine();
-					out.write(line.getBytes());
-				}
-			}
-			else
-			{
-				out.write(("Error:" + status).getBytes());
-			}
-		} 
-		catch (IOException e) {
-			DockerMonitor.log.log(Level.SEVERE, e.getMessage());
-			try {
-				out.write(("Error:" + e.getMessage()).getBytes());
-			}
-			catch (IOException ioe) {}
-		}
-		finally {
-			try {
-				if (bufR != null) {
-					bufR.close();
-				}
-
-				if (ibuf != null) {
-					ibuf.close();
-				}
-				
-				if (in != null ) {
-					in.close();
-				}
-			}
-			catch (IOException ioe) {}
-		}
-
-		Integer rc = child.exitValue();
-		String reply = out.toString();
-		DockerMonitor.log.log(Level.SEVERE, "REPLY=" + reply);
-			return reply;
-		}
-	}
-*/
-/*	private String getDataLocally(String command, boolean readUnlimited) throws IOException {
-		String updatedCmd = String.format(UNIX_SOCKET_CMD_LOCAL, command);
-		DockerMonitor.log.log(Level.SEVERE, "Command=" + updatedCmd);
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		ByteArrayOutputStream err = new ByteArrayOutputStream();
-
-		String[] execCmd = {"sh", "-c", updatedCmd};
-		ProcessBuilder pbuilder = new ProcessBuilder(execCmd);
-		Process child = pbuilder.start();
-
-		new Pipe().pipe(child, out, err, readUnlimited);
-		try {
-			child.waitFor(); 
-		} catch (InterruptedException e) {
-			DockerMonitor.log.log(Level.SEVERE,"getDataLocally method: the InterruptedException exception was thrown:" + e.getMessage());
-		}
-		Integer rc = child.exitValue();
-		String reply = out.toString();
-		DockerMonitor.log.log(Level.SEVERE, "REPLY=" + reply);
-		String error = err.toString();
-		if ( reply.startsWith("Error") || !error.equals("")) {
-			if (reply.startsWith("Error")) {
-				throw new IOException("Reply error occurred in getDataLocally:" + reply);
-			}
-			else {
-				if ( !error.contains("Broken pipe")) {
-					throw new IOException("Error occurred in getDataLocally:" + error);
-				}
-				return reply;
-			}
-		}
-		else {
-			return reply;
-		}
-	}
-
-*/	
 	private String getDataLocally(String command, boolean readUnlimited) throws IOException {
 		String updatedCmd = String.format(UNIX_SOCKET_CMD_LOCAL, command);
 		AFUNIXSocket sock = AFUNIXSocket.newInstance();

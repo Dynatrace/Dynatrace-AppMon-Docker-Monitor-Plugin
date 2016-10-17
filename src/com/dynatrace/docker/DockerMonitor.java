@@ -10,8 +10,10 @@ package com.dynatrace.docker;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.text.DecimalFormat;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
@@ -51,19 +53,22 @@ public class DockerMonitor implements Monitor {
 	private static final String CONNECTION_TYPE_UNIX_SOCKET = "UNIX SOCKET";
 	private static final String CONNECTION_TYPE_TCP_PORT = "TCP Port";
 	private static final String SSH_OR_LOCAL = "sshOrLocal";
+	private static final String DOCKER_HOSTS = "dockerHosts";
 	public static final String SSH = "SSH";
 	public static final String LOCAL = "Local";
 	private static final String LOGIN_USER = "loginUser";
 	private static final String PASSWORD = "password";
 	private static final String DOCKER_PORT = "dockerPort";
-	private String[] METRICS_CONTAINER_INFO = {"containerCount", "imageCount"};
-	private String[] METRICS_CPU =  {"total_usage", "usage_in_usermode", "system_cpu_usage", "total_usage_delta", "usage_in_usermode_delta", "system_cpu_usage_delta","cpu_percentage"};
-	private String[] METRICS_MEMORY =  {"usage","limit","memoryUsage", "usage_delta"};
-	private String[] METRICS_NETWORK =  {"rx_bytes","tx_bytes","rx_packets", "tx_packets", "rx_bytes_delta", "tx_bytes_delta", "rx_packets_delta", "tx_packets_delta"};
+	private static String[] METRICS_CONTAINER_INFO = {"containerCount", "imageCount"};
+	private static String[] METRICS_CPU =  {"total_usage", "usage_in_usermode", "system_cpu_usage", "total_usage_delta", "usage_in_usermode_delta", "system_cpu_usage_delta","cpu_percentage"};
+	private static String[] METRICS_MEMORY =  {"usage","limit","memoryUsage", "usage_delta"};
+	private static String[] METRICS_NETWORK =  {"rx_bytes","tx_bytes","rx_packets", "tx_packets", "rx_bytes_delta", "tx_bytes_delta", "rx_packets_delta", "tx_packets_delta"};
 	private DataCollector dataCollector;
-	private static HashMap<String, Double> cpuCache = new HashMap<String, Double>();
-	private static HashMap<String, Double> networkCache = new HashMap<String, Double>();
-	private String host;
+	private HashMap<String, Double> cpuCache = new HashMap<String, Double>();
+	private HashMap<String, Double> networkCache = new HashMap<String, Double>();
+	private ArrayList<String> hosts = new ArrayList<String>();
+	private String connectionType;
+	private boolean libraryLoaded=false;
 
 	/**
 	 * Initializes the Plugin. This method is called in the following cases:
@@ -90,41 +95,16 @@ public class DockerMonitor implements Monitor {
 	
 	@Override
 	public Status setup(MonitorEnvironment env) throws Exception {
-        host = env.getHost().getAddress();
-		String connectionType = env.getConfigString(CONNECTION_TYPE);
-		if (connectionType.equals(CONNECTION_TYPE_TCP_PORT)) {
-			String port = env.getConfigString(DOCKER_PORT);
-			if ( port == null || port.equals("") ) {
-				return new Status(Status.StatusCode.ErrorInternalConfigurationProblem, "Port number is not defined");
-			}
-			ConnectionConfig connectionConfig = new ConnectionConfig();
-			connectionConfig.setHost(host);
-			connectionConfig.setPort(new Integer(port).intValue());
-			connectionConfig.setProtocol(Protocol.HTTP);
-			ServerConfig serverConfig = new ServerConfig();
-			serverConfig.setConnectionConfig(connectionConfig);
-			dataCollector = new TCPSocketDataCollector(serverConfig);
-		}
-		else if (connectionType.equalsIgnoreCase(CONNECTION_TYPE_UNIX_SOCKET)) {
-			String sshOrLocal = env.getConfigString(SSH_OR_LOCAL);
-			UnixSocketDataCollector uCollector = new UnixSocketDataCollector();
-			if (sshOrLocal.equals(SSH)) {
-				String user = env.getConfigString(LOGIN_USER);
-				String pass = env.getConfigPassword(PASSWORD);
-				uCollector.setConnectionMode(SSH);
-				uCollector.setHost(host);
-				uCollector.setUser(user);
-				uCollector.setPassword(pass);
-				dataCollector = uCollector;
-			}
-			else {
-				//Using junixsocket library to read data from the docker.sock file
-				System.setProperty("org.newsclub.net.unix.library.path", System.getProperty("user.dir"));		
-				LibUtils.installNativeLibraryFromResources("libjunixsocket-linux-1.5-amd64.so");
-				uCollector.setConnectionMode(LOCAL);
-				dataCollector = uCollector;
-			}
-		}
+        String hostList = env.getConfigString(DOCKER_HOSTS);
+        if ( hostList == null || hostList.isEmpty()) {
+        	return new Status(Status.StatusCode.ErrorTargetService, "No hosts list defined");
+        }
+        parseHostList(hostList);
+        if (hosts.size() == 0) {
+        	return new Status(Status.StatusCode.ErrorTargetService, "No hosts list defined");        	
+        }
+        log.log(Level.FINE, "Number of hosts=" + hosts.size());
+		connectionType = env.getConfigString(CONNECTION_TYPE);
 		return new Status(Status.StatusCode.Success);
 	}
 
@@ -152,44 +132,112 @@ public class DockerMonitor implements Monitor {
 	 */
 	@Override
 	public Status execute(MonitorEnvironment env) throws Exception {
-		try {
-			Map<String, Map<String, Map<String, Double>>> containersMap = new HashMap<String, Map<String, Map<String, Double>>>();
-			JsonNode containerInfo = dataCollector.collectContainerAndImageCount(JsonNode.class);
-			Map<String, Double> containerInfoMap = new HashMap<String, Double>();
-			if ( containerInfo != null) {
-				BigInteger noOfContainers = getBigIntegerValue("Containers", containerInfo);
-				BigInteger noOfImages = getBigIntegerValue("Images", containerInfo);
-				containerInfoMap.put(METRICS_CONTAINER_INFO[0], new Double(noOfContainers.doubleValue()));
-				containerInfoMap.put(METRICS_CONTAINER_INFO[1], new Double(noOfImages.doubleValue()));
-			}
-			ArrayNode containers = dataCollector.collectContainerList(ArrayNode.class);
-			// The key for the containersMap would be the containerName.
-			// The value of the containersMap would be another Map (firstInnerMap) that would have CPUGroup or MemoryGroup or NetworkGroup as the keys and the value
-			// of this map would be another map (secondInnerMap). The key of the secondInnerMap would be metric name like usage, rx_bytes etc and the value
-			// would be the actual value.
-			log.log(Level.FINER, "Size=" + containers.size());
-			if (containers != null)
-			{
-				for (JsonNode container : containers)
-				{
-					Map<String, Map<String, Double>> containerMap = new HashMap<String, Map<String, Double>>();
-					String containerId = getStringValue("Id", container);
-					String containerName = getContainerName(container);
-					JsonNode containerStat = dataCollector.collectContainerData(containerId, JsonNode.class);
-					log.log(Level.FINER, "Done getting all the data");
-					populateContainerStat(containerStat, containerMap, containerName);
-					containersMap.put(containerName, containerMap);
+		Map<String, Map<String, Map<String, Map<String, Double>>>> allContainers = new HashMap<String, Map<String, Map<String, Map<String, Double>>>>();
+		int totalNumberOfContainers = 0;
+		int totalNumberOfImages = 0;
+		for ( String host:hosts) {			
+			try {
+				DataCollector dataCollector = getCollector(host, env);
+				Map<String, Map<String, Map<String, Double>>> containersMap = new HashMap<String, Map<String, Map<String, Double>>>();
+				JsonNode containerInfo = dataCollector.collectContainerAndImageCount(JsonNode.class);
+				Map<String, Double> containerInfoMap = new HashMap<String, Double>();
+				if ( containerInfo != null) {
+					BigInteger noOfContainers = getBigIntegerValue("Containers", containerInfo);
+					BigInteger noOfImages = getBigIntegerValue("Images", containerInfo);
+					containerInfoMap.put(METRICS_CONTAINER_INFO[0], new Double(noOfContainers.doubleValue()));
+					containerInfoMap.put(METRICS_CONTAINER_INFO[1], new Double(noOfImages.doubleValue()));
+					totalNumberOfContainers += noOfContainers.intValue();
+					totalNumberOfImages += noOfImages.intValue();
 				}
+				ArrayNode containers = dataCollector.collectContainerList(ArrayNode.class);
+				// The key for the containersMap would be the containerName.
+				// The value of the containersMap would be another Map that would have CPUGroup or MemoryGroup or NetworkGroup as the keys and the value
+				// of this map would be another map (secondInnerMap). The key of the secondInnerMap would be metric name like usage, rx_bytes etc and the value
+				// would be the actual value.
+				log.log(Level.FINER, "Size=" + containers.size());
+				if (containers != null)
+				{
+					for (JsonNode container : containers)
+					{
+						Map<String, Map<String, Double>> containerMap = new HashMap<String, Map<String, Double>>();
+						String containerId = getStringValue("Id", container);
+						String containerName = getContainerName(container);
+						JsonNode containerStat = dataCollector.collectContainerData(containerId, JsonNode.class);
+						log.log(Level.FINER, "Done getting all the data");
+						populateContainerStat(containerStat, containerMap, containerName, host);
+						containerMap.put("CIGroup", containerInfoMap);
+						containersMap.put(containerName, containerMap);
+					}
+				}
+				allContainers.put(host, containersMap);
 			}
-			populateDockerMetrics(containersMap, containerInfoMap, env);
-			return new Status(Status.StatusCode.Success);
+			catch (IOException ioe) {
+				log.log(Level.SEVERE, ioe.getMessage());
+				return new Status(Status.StatusCode.ErrorInternalException, ioe.getMessage());
+			}
 		}
-		catch (IOException ioe) {
-			log.log(Level.SEVERE, ioe.getMessage());
-			return new Status(Status.StatusCode.ErrorInternalException, ioe.getMessage());
-		}
+		populateDockerMetrics(allContainers, totalNumberOfContainers, totalNumberOfImages, env);
+		return new Status(Status.StatusCode.Success);		
 	}
 
+	private void parseHostList(String hostList) {
+		String[] tokens = hostList.split(",");
+		if ( tokens == null || tokens.length == 0) {
+			return;
+		}
+		
+		for (int i=0; i<tokens.length; i++) {
+			hosts.add(tokens[i]);
+		}
+	}
+	
+	private DataCollector getCollector(String host, MonitorEnvironment env) throws Exception {
+		if (connectionType.equals(CONNECTION_TYPE_TCP_PORT)) {
+			String port = env.getConfigString(DOCKER_PORT);
+			if ( port == null || port.equals("") ) {
+				throw new Exception("Port number is not defined");
+			}
+			ConnectionConfig connectionConfig = new ConnectionConfig();
+			connectionConfig.setHost(host);
+			connectionConfig.setPort(new Integer(port).intValue());
+			connectionConfig.setProtocol(Protocol.HTTP);
+			ServerConfig serverConfig = new ServerConfig();
+			serverConfig.setConnectionConfig(connectionConfig);
+			dataCollector = new TCPSocketDataCollector(serverConfig);
+		}
+		else if (connectionType.equalsIgnoreCase(CONNECTION_TYPE_UNIX_SOCKET)) {
+			String sshOrLocal = env.getConfigString(SSH_OR_LOCAL);
+			UnixSocketDataCollector uCollector = new UnixSocketDataCollector();
+			if (sshOrLocal.equals(SSH)) {
+				String user = env.getConfigString(LOGIN_USER);
+				String pass = env.getConfigPassword(PASSWORD);
+				uCollector.setConnectionMode(SSH);
+				uCollector.setHost(host);
+				uCollector.setUser(user);
+				uCollector.setPassword(pass);
+				dataCollector = uCollector;
+			}
+			else {
+				//Using junixsocket library to read data from the docker.sock file. Load the library once once.
+				if ( !libraryLoaded) {
+					final String arch = System.getProperty("os.arch");
+					System.setProperty("org.newsclub.net.unix.library.path", System.getProperty("user.dir"));
+					if (arch.contains("64")) {
+						LibUtils.installNativeLibraryFromResources("libjunixsocket-linux-1.5-amd64.so");
+					}
+					else {
+						LibUtils.installNativeLibraryFromResources("libjunixsocket-linux-1.5-i386.so");					
+					}
+					libraryLoaded=true;
+				}
+				uCollector.setConnectionMode(LOCAL);
+				dataCollector = uCollector;
+			}
+		}
+		
+		return dataCollector;
+
+	}
 	private String getStringValue(String propertyName, JsonNode node)
 	{
 		JsonNode jsonNode = node.get(propertyName);
@@ -208,10 +256,10 @@ public class DockerMonitor implements Monitor {
 		return getStringValue("Id", container);
 	}
 
-	private void populateContainerStat(JsonNode node, Map<String, Map<String, Double>> containerMap, String containerName) {
+	private void populateContainerStat(JsonNode node, Map<String, Map<String, Double>> containerMap, String containerName, String host) {
 		getMemoryUsage(node, containerMap);
-		getCPUUsage(node, containerMap, containerName);
-		getNetworkUsage(node, containerMap, containerName);
+		getCPUUsage(node, containerMap, containerName, host);
+		getNetworkUsage(node, containerMap, containerName, host);
 	}
 
 	private BigInteger getBigIntegerValue(String propertyName, JsonNode node)
@@ -249,7 +297,7 @@ public class DockerMonitor implements Monitor {
 		}
 	}
 	  
-	private void getCPUUsage(JsonNode node, Map<String, Map<String, Double>> theMap, String containerName)
+	private void getCPUUsage(JsonNode node, Map<String, Map<String, Double>> theMap, String containerName, String host)
 	{
 		Map<String, Double> innerMap = new HashMap<String, Double>();
 		JsonNode stats = node.get("cpu_stats");
@@ -313,7 +361,7 @@ public class DockerMonitor implements Monitor {
 		theMap.put("CPUGroup", innerMap);
 	}
 
-	private void getNetworkUsage(JsonNode node, Map<String,Map<String, Double>> theMap, String containerName) {
+	private void getNetworkUsage(JsonNode node, Map<String,Map<String, Double>> theMap, String containerName, String host) {
 		Map<String, Double> innerMap = new HashMap<String, Double>();
 		JsonNode netStats = node.get("network");
 		if (netStats != null) 
@@ -386,52 +434,80 @@ public class DockerMonitor implements Monitor {
 		return new Double(0);
 	}
 	
-	private void populateDockerMetrics(Map<String, Map<String, Map<String, Double>>> containers, Map<String, Double> containerInfoMap, MonitorEnvironment env) {
-		for (int index = 0; index < METRICS_CONTAINER_INFO.length; index++) {
-			Collection<MonitorMeasure> monitorMeasures = env.getMonitorMeasures("CIGroup", METRICS_CONTAINER_INFO[index]);
+	private void populateDockerMetrics(Map<String, Map<String, Map<String, Map<String, Double>>>> allContainers, int totalContainerCount, int totalImageCount, MonitorEnvironment env) {
+		Set<String> hostSet = allContainers.keySet();
+		for (String hostName : hostSet) {	
+			log.log(Level.FINE, "Processing host="+ hostName);
+			Map<String, Map<String, Map<String, Double>>> containers = allContainers.get(hostName);
+			Collection<MonitorMeasure> monitorMeasures = env.getMonitorMeasures("SummaryGroup", "dockerInstanceCount");
 			for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
-				subscribedMonitorMeasure.setValue(containerInfoMap.get(METRICS_CONTAINER_INFO[index]));
+				subscribedMonitorMeasure.setValue(totalContainerCount);
 			}
-		}		
-		Set<String> keySet = containers.keySet();
-		log.log(Level.FINER, "size of the map=" + keySet.size());
-		for (int index = 0; index < METRICS_CPU.length; index++) {
-			for (String key : keySet) {
-				Map<String, Map<String, Double>> containerMap = containers.get(key);
-				Map<String, Double> cpuMap = containerMap.get("CPUGroup");
-				Collection<MonitorMeasure> monitorMeasures = env.getMonitorMeasures("CPUGroup", METRICS_CPU[index]);
-				for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
-					MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Container Name", key);
-					dynamicMeasure.setValue(cpuMap.get(METRICS_CPU[index]));
-					}
-			}
-		}
 
-		// Populating Memory Stats
-		keySet = containers.keySet();
-		for (int index = 0; index < METRICS_MEMORY.length; index++) {
-			for (String key : keySet) {
-				Map<String, Map<String, Double>> containerMap = containers.get(key);
-				Map<String, Double> memoryMap = containerMap.get("MemoryGroup");
-				Collection<MonitorMeasure> monitorMeasures = env.getMonitorMeasures("MemoryGroup", METRICS_MEMORY[index]);
-				for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
-					MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Container Name", key);
-					dynamicMeasure.setValue(memoryMap.get(METRICS_MEMORY[index]));
+			monitorMeasures = env.getMonitorMeasures("SummaryGroup", "dockerImageCount");
+			for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+				subscribedMonitorMeasure.setValue(totalImageCount);
+			}
+
+			Set<String> keySet = containers.keySet();
+			log.log(Level.FINE, "size of the map=" + keySet.size());
+			for (int index = 0; index < METRICS_CONTAINER_INFO.length; index++) {
+				for (String key : keySet) {
+					Map<String, Map<String, Double>> containerMap = containers.get(key);
+					Map<String, Double> cpuMap = containerMap.get("CIGroup");
+					monitorMeasures = env.getMonitorMeasures("CIGroup", METRICS_CONTAINER_INFO[index]);
+					for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+						MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Container Name", hostName + ":" + key);
+						dynamicMeasure.setValue(cpuMap.get(METRICS_CONTAINER_INFO[index]));
+					}
 				}
 			}
-		}
-		
-		// Populating Network Stats
-		log.log(Level.FINER, "Done with Memory.Starting Network");
-		keySet = containers.keySet();
-		for (int index = 0; index < METRICS_NETWORK.length; index++) {
-			for (String key : keySet) {
-				Map<String, Map<String, Double>> containerMap = containers.get(key);
-				Map<String, Double> networkMap = containerMap.get("NetworkGroup");
-				Collection<MonitorMeasure> monitorMeasures = env.getMonitorMeasures("NetworkGroup", METRICS_NETWORK[index]);
-				for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
-					MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Container Name", key);
-					dynamicMeasure.setValue(networkMap.get(METRICS_NETWORK[index]));
+
+			keySet = containers.keySet();
+			log.log(Level.FINE, "size of the map=" + keySet.size());
+			for (int index = 0; index < METRICS_CPU.length; index++) {
+				for (String key : keySet) {
+					Map<String, Map<String, Double>> containerMap = containers.get(key);
+					Map<String, Double> cpuMap = containerMap.get("CPUGroup");
+					monitorMeasures = env.getMonitorMeasures("CPUGroup", METRICS_CPU[index]);
+					for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+						MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Container Name", hostName + ":" + key);
+						dynamicMeasure.setValue(cpuMap.get(METRICS_CPU[index]));
+					}
+				}
+			}
+
+			// Populating Memory Stats
+			keySet = containers.keySet();
+			for (int index = 0; index < METRICS_MEMORY.length; index++) {
+				for (String key : keySet) {
+					Map<String, Map<String, Double>> containerMap = containers.get(key);
+					Map<String, Double> memoryMap = containerMap.get("MemoryGroup");
+					monitorMeasures = env.getMonitorMeasures("MemoryGroup", METRICS_MEMORY[index]);
+					for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+						MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Container Name", hostName + ":" + key);
+						dynamicMeasure.setValue(memoryMap.get(METRICS_MEMORY[index]));
+					}
+				}
+			}
+
+			// Populating Network Stats
+			log.log(Level.FINE, "Done with Memory.Starting Network");
+			keySet = containers.keySet();
+			for (int index = 0; index < METRICS_NETWORK.length; index++) {
+				for (String key : keySet) {
+					Map<String, Map<String, Double>> containerMap = containers.get(key);
+					Map<String, Double> networkMap = containerMap.get("NetworkGroup");
+
+					// If docker is deployed with Kubernetes, the network stats are not available and hence checking the size of the map.
+					if (networkMap == null || networkMap.size() == 0) {
+						continue;
+					}
+					monitorMeasures = env.getMonitorMeasures("NetworkGroup", METRICS_NETWORK[index]);
+					for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+						MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Container Name", hostName + ":" + key);
+						dynamicMeasure.setValue(networkMap.get(METRICS_NETWORK[index]));
+					}
 				}
 			}
 		}

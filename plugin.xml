@@ -10,6 +10,7 @@
       <supportlevel value="unsupported" />
     </information>
     <configuration>
+      <property key="dockerHosts" label="Docker Host(s)" type="string" description="List all the host(s) running Docker daemon. Separate the host names or IP addresses by comma(,)" default="" multiline="true" />
       <property key="connectionType" label="Connection Type" type="list" description="My property description ..." default="Unix Socket">
         <list>
           <item value="Unix Socket" />
@@ -81,5 +82,10 @@
       <metric defaultrate="purepath" name="imageCount" unit="number" description="My metric description ..." />
     </metricgroup>
   </extension>
+  <extension point="com.dynatrace.diagnostics.pdk.monitormetricgroup" id="com.dynatrace.docker.plugin.monitor.metricgroup5" name="SummaryGroup">
+    <metricgroup monitorid="com.dynatrace.docker.plugin.monitor">
+      <metric defaultrate="purepath" name="dockerInstanceCount" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="dockerImageCount" unit="number" description="My metric description ..." />
+    </metricgroup>
+  </extension>
 </plugin>
-
