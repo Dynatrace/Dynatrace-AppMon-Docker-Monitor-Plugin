@@ -10,14 +10,17 @@ package com.dynatrace.docker;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.text.DecimalFormat;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.codehaus.jackson.JsonNode;
+import org.codehaus.jackson.map.ObjectMapper;
 import org.codehaus.jackson.node.ArrayNode;
 import org.codehaus.jackson.node.BooleanNode;
 
@@ -30,10 +33,12 @@ import com.dynatrace.diagnostics.pdk.TaskEnvironment;
 import com.dynatrace.docker.collector.DataCollector;
 import com.dynatrace.docker.collector.TCPSocketDataCollector;
 import com.dynatrace.docker.collector.UnixSocketDataCollector;
+import com.dynatrace.docker.rest.Request;
 import com.dynatrace.docker.rest.config.ConnectionConfig;
 import com.dynatrace.docker.rest.config.ServerConfig;
 import com.dynatrace.docker.util.LibUtils;
 import com.dynatrace.docker.util.Protocol;
+import com.dynatrace.docker.util.HelperUtils;
 
 
 /**
@@ -47,23 +52,37 @@ import com.dynatrace.docker.util.Protocol;
 public class DockerMonitor implements Monitor {
 
 	public static final Logger log = Logger.getLogger(DockerMonitor.class.getName());
+	private static final String DOCKER_DEPLOYMENT = "dockerDeployment";
+	private static final String MESOS_MASTER_IP = "mesosHost";
+	private static final String MESOS_USE_AUTHENTICATION = "mesosUseAuthentication";
+	private static final String MESOS_USER_ID = "mesosUserId";
+	private static final String MESOS_PASSWORD = "mesosPassword";
+	private static final String MESOS_MASTER_PORT = "mesosMasterPort";
+	
 	private static final String CONNECTION_TYPE = "connectionType";
 	private static final String CONNECTION_TYPE_UNIX_SOCKET = "UNIX SOCKET";
 	private static final String CONNECTION_TYPE_TCP_PORT = "TCP Port";
 	private static final String SSH_OR_LOCAL = "sshOrLocal";
+	private static final String DOCKER_HOSTS = "dockerHosts";
 	public static final String SSH = "SSH";
 	public static final String LOCAL = "Local";
 	private static final String LOGIN_USER = "loginUser";
 	private static final String PASSWORD = "password";
 	private static final String DOCKER_PORT = "dockerPort";
-	private String[] METRICS_CONTAINER_INFO = {"containerCount", "imageCount"};
-	private String[] METRICS_CPU =  {"total_usage", "usage_in_usermode", "system_cpu_usage", "total_usage_delta", "usage_in_usermode_delta", "system_cpu_usage_delta","cpu_percentage"};
-	private String[] METRICS_MEMORY =  {"usage","limit","memoryUsage", "usage_delta"};
-	private String[] METRICS_NETWORK =  {"rx_bytes","tx_bytes","rx_packets", "tx_packets", "rx_bytes_delta", "tx_bytes_delta", "rx_packets_delta", "tx_packets_delta"};
+	private static final String MESOS = "Mesos/Marathon";
+	private static final String UNMANAGED = "Unmanaged";
+	private static final String[] METRIC_GROUP = { "CPUGroup", "MemoryGroup", "NetworkGroup", "HostGroup", "SummaryGroup"};
+	private static String[] METRICS_HOST = {"hostContainerCount", "hostContainerRunning", "hostContainerStopped", "hostContainerPaused", "hostImageCount"};
+	private static String[] METRICS_CPU =  {"total_usage", "usage_in_usermode", "system_cpu_usage", "total_usage_delta", "usage_in_usermode_delta", "system_cpu_usage_delta","cpu_percentage"};
+	private static String[] METRICS_MEMORY =  {"usage","limit","memoryUsage", "usage_delta"};
+	private static String[] METRICS_NETWORK =  {"rx_bytes","tx_bytes","rx_packets", "tx_packets", "rx_bytes_delta", "tx_bytes_delta", "rx_packets_delta", "tx_packets_delta"};
+	private static String[] METRICS_SUMMARY = {"totalContainerCount", "totalContainerRunning", "totalContainerStopped", "totalContainerPaused", "totalImageCount"};
 	private DataCollector dataCollector;
-	private static HashMap<String, Double> cpuCache = new HashMap<String, Double>();
-	private static HashMap<String, Double> networkCache = new HashMap<String, Double>();
-	private String host;
+	private HashMap<String, Double> cpuCache = new HashMap<String, Double>();
+	private HashMap<String, Double> networkCache = new HashMap<String, Double>();
+	private ArrayList<String> hosts = new ArrayList<String>();
+	private String connectionType;
+	private boolean libraryLoaded=false;
 
 	/**
 	 * Initializes the Plugin. This method is called in the following cases:
@@ -90,44 +109,179 @@ public class DockerMonitor implements Monitor {
 	
 	@Override
 	public Status setup(MonitorEnvironment env) throws Exception {
-        host = env.getHost().getAddress();
-		String connectionType = env.getConfigString(CONNECTION_TYPE);
-		if (connectionType.equals(CONNECTION_TYPE_TCP_PORT)) {
-			String port = env.getConfigString(DOCKER_PORT);
-			if ( port == null || port.equals("") ) {
-				return new Status(Status.StatusCode.ErrorInternalConfigurationProblem, "Port number is not defined");
+		String dockerDeploymentType = env.getConfigString(DOCKER_DEPLOYMENT);
+		/** Get the list of hosts if Docker is deployed in Unmanaged. For other deployment category, we will get the 
+		 * list in execute method.
+		 */
+		if (dockerDeploymentType.equals(UNMANAGED)) {
+			String hostList = env.getConfigString(DOCKER_HOSTS);
+			if ( hostList == null || hostList.isEmpty()) {
+				return new Status(Status.StatusCode.ErrorTargetService, "No hosts list defined");
 			}
-			ConnectionConfig connectionConfig = new ConnectionConfig();
-			connectionConfig.setHost(host);
-			connectionConfig.setPort(new Integer(port).intValue());
-			connectionConfig.setProtocol(Protocol.HTTP);
-			ServerConfig serverConfig = new ServerConfig();
-			serverConfig.setConnectionConfig(connectionConfig);
-			dataCollector = new TCPSocketDataCollector(serverConfig);
+			parseHostList(hostList);
+			if (hosts.size() == 0) {
+				return new Status(Status.StatusCode.ErrorTargetService, "No hosts list defined");        	
+			}
+	        log.log(Level.FINE, "Number of hosts=" + hosts.size());
+			connectionType = env.getConfigString(CONNECTION_TYPE);
 		}
-		else if (connectionType.equalsIgnoreCase(CONNECTION_TYPE_UNIX_SOCKET)) {
-			String sshOrLocal = env.getConfigString(SSH_OR_LOCAL);
-			UnixSocketDataCollector uCollector = new UnixSocketDataCollector();
-			if (sshOrLocal.equals(SSH)) {
-				String user = env.getConfigString(LOGIN_USER);
-				String pass = env.getConfigPassword(PASSWORD);
-				uCollector.setConnectionMode(SSH);
-				uCollector.setHost(host);
-				uCollector.setUser(user);
-				uCollector.setPassword(pass);
-				dataCollector = uCollector;
+		else if (dockerDeploymentType.equals(MESOS)) {
+			String mesosHost = env.getConfigString(MESOS_MASTER_IP);
+			String mesosPort = env.getConfigString(MESOS_MASTER_PORT);
+			String dockerPort = env.getConfigString(DOCKER_PORT);
+			
+			if ( mesosHost == null || mesosHost.isEmpty()) {
+				return new Status(Status.StatusCode.ErrorInternalConfigurationProblem, "Mesos host is not provided");
 			}
-			else {
-				//Using junixsocket library to read data from the docker.sock file
-				System.setProperty("org.newsclub.net.unix.library.path", System.getProperty("user.dir"));		
-				LibUtils.installNativeLibraryFromResources("libjunixsocket-linux-1.5-amd64.so");
-				uCollector.setConnectionMode(LOCAL);
-				dataCollector = uCollector;
+			if ( mesosPort == null || mesosPort.isEmpty()) {
+				return new Status(Status.StatusCode.ErrorInternalConfigurationProblem, "Mesos port is not provided");
 			}
+			if ( dockerPort == null || dockerPort.isEmpty()) {
+				return new Status(Status.StatusCode.ErrorInternalConfigurationProblem, "Docker port is not provided");
+			}
+
+			connectionType = CONNECTION_TYPE_TCP_PORT;
 		}
 		return new Status(Status.StatusCode.Success);
 	}
+	
+	public abstract static class GroupData {
+		public abstract Double getValue(String key1, String key2);
+		public abstract void putValue(String key1, String key2, Double value);
+	} 
+	
+	public static class GenericGroupData extends GroupData {
+		private Map<String, Double> data = new HashMap<>();
+	
+		public Double getValue(String key1, String key2) {
+			return data.get(key1);
+		}
+		
+		public void putValue(String key1, String key2, Double value) {
+			data.put(key1, value);
+		}
+	}
 
+	public static class NetworkGroupData extends GroupData {
+		private Map<String,Map<String,Double>> data = new HashMap<>();
+	
+		public Double getValue(String key1, String key2) {
+			Map<String, Double> innerMap = data.get(key1);
+			if (innerMap == null) {
+				return null;
+			}
+			
+			return innerMap.get(key2);
+		}
+		
+		public void putValue(String key1, String key2, Double value) {
+			Map<String, Double> innerMap = data.get(key1);
+			if ( innerMap == null) {
+				innerMap = new HashMap<String, Double>();
+				data.put(key1, innerMap);
+			}
+			
+			innerMap.put(key2, value);
+		}
+		
+		public Set<String> getAllInterfaceSet() {
+			return data.keySet();
+		}
+	}
+	
+	
+	// This class contains cpu, memory, network information for multiple containers
+	public static class ContainerData {
+		private final Map<String, GroupData> groupData = new HashMap<>();
+
+		public ContainerData() {
+			GenericGroupData cpuGroupData = new GenericGroupData();
+			GenericGroupData memoryGroupData = new GenericGroupData();
+			NetworkGroupData networkGroupData = new NetworkGroupData();
+			groupData.put(METRIC_GROUP[0], cpuGroupData);
+			groupData.put(METRIC_GROUP[1], memoryGroupData);
+			groupData.put(METRIC_GROUP[2], networkGroupData);
+		}
+		
+		public GroupData getGroup(String key) {
+			return groupData.get(key);
+		}
+	}
+	
+	// This class contains container data for one host.
+	public static class HostData {
+		private final Map<String, ContainerData> containerData = new HashMap<>();
+		private BigInteger noOfContainers=null, noOfImages=null, noOfContainersRunning=null, noOfContainersStopped=null, noOfContainersPaused=null;
+		public ContainerData getContainerData(String key) {
+			ContainerData theContainerData = containerData.get(key);
+			if (theContainerData == null) {
+				theContainerData = new ContainerData();
+				containerData.put(key, theContainerData);
+			}
+			return theContainerData;
+		}
+		
+		public void setNoOfContainers(BigInteger noOfContainers) {
+			this.noOfContainers = noOfContainers;
+		}
+
+		public void setNoOfContainersRunning(BigInteger noOfContainersRunning) {
+			this.noOfContainersRunning = noOfContainersRunning;
+		}
+
+		public void setNoOfContainersStopped(BigInteger noOfContainersStopped) {
+			this.noOfContainersStopped = noOfContainersStopped;
+		}
+
+		public void setNoOfContainersPaused(BigInteger noOfContainersPaused) {
+			this.noOfContainersPaused = noOfContainersPaused;
+		}
+
+		public void setNoOfImages(BigInteger noOfImages) {
+			this.noOfImages = noOfImages;
+		}
+
+		public BigInteger getNoOfContainers() {
+			return this.noOfContainers;
+		}
+
+		public BigInteger getNoOfContainersRunning() {
+			return this.noOfContainersRunning;
+		}
+
+		public BigInteger getNoOfContainersStopped() {
+			return this.noOfContainersStopped;
+		}
+
+		public BigInteger getNoOfContainersPaused() {
+			return this.noOfContainersPaused;
+		}
+
+		public BigInteger getNoOfImages() {
+			return this.noOfImages;
+		}
+		
+		public Set<String> getAllContainersSet() {
+			return containerData.keySet();
+		}
+	}
+
+	// This class contains multiple HostData with hostName as the key.
+	public static class AllHostsData {
+		private final Map<String, HostData> hostData = new HashMap<>();
+		public HostData getHostData(String key) {
+			HostData theHostData = hostData.get(key);
+			if (theHostData == null) {
+				theHostData = new HostData();
+				hostData.put(key, theHostData);
+			}
+			return theHostData;
+		}
+		
+		public Set<String> getAllHostsSet() {
+			return hostData.keySet();
+		}
+	}
 	/**
 	 * Executes the Monitor Plugin to retrieve subscribed measures and store
 	 * measurements.
@@ -152,44 +306,136 @@ public class DockerMonitor implements Monitor {
 	 */
 	@Override
 	public Status execute(MonitorEnvironment env) throws Exception {
-		try {
-			Map<String, Map<String, Map<String, Double>>> containersMap = new HashMap<String, Map<String, Map<String, Double>>>();
-			JsonNode containerInfo = dataCollector.collectContainerAndImageCount(JsonNode.class);
-			Map<String, Double> containerInfoMap = new HashMap<String, Double>();
-			if ( containerInfo != null) {
-				BigInteger noOfContainers = getBigIntegerValue("Containers", containerInfo);
-				BigInteger noOfImages = getBigIntegerValue("Images", containerInfo);
-				containerInfoMap.put(METRICS_CONTAINER_INFO[0], new Double(noOfContainers.doubleValue()));
-				containerInfoMap.put(METRICS_CONTAINER_INFO[1], new Double(noOfImages.doubleValue()));
-			}
-			ArrayNode containers = dataCollector.collectContainerList(ArrayNode.class);
-			// The key for the containersMap would be the containerName.
-			// The value of the containersMap would be another Map (firstInnerMap) that would have CPUGroup or MemoryGroup or NetworkGroup as the keys and the value
-			// of this map would be another map (secondInnerMap). The key of the secondInnerMap would be metric name like usage, rx_bytes etc and the value
-			// would be the actual value.
-			log.log(Level.FINER, "Size=" + containers.size());
-			if (containers != null)
-			{
-				for (JsonNode container : containers)
-				{
-					Map<String, Map<String, Double>> containerMap = new HashMap<String, Map<String, Double>>();
-					String containerId = getStringValue("Id", container);
-					String containerName = getContainerName(container);
-					JsonNode containerStat = dataCollector.collectContainerData(containerId, JsonNode.class);
-					log.log(Level.FINER, "Done getting all the data");
-					populateContainerStat(containerStat, containerMap, containerName);
-					containersMap.put(containerName, containerMap);
+		if (env.getConfigString(DOCKER_DEPLOYMENT).equals(MESOS) ) {
+			try {
+				populateHostList(env);
+				if (hosts.isEmpty()) {
+					return new Status(Status.StatusCode.ErrorInfrastructure, "Unable to retreive the host lists from Mesos enironment");
+				}
+				else {
+					for (String host:hosts) {
+						log.log(Level.FINER, "Hostname=" + host);
+					}
 				}
 			}
-			populateDockerMetrics(containersMap, containerInfoMap, env);
-			return new Status(Status.StatusCode.Success);
+			catch (IOException ioe) {
+				log.log(Level.SEVERE, HelperUtils.getExceptionAsString(ioe));
+				return new Status(Status.StatusCode.ErrorInfrastructure, HelperUtils.getExceptionAsString(ioe));
+			}
 		}
-		catch (IOException ioe) {
-			log.log(Level.SEVERE, ioe.getMessage());
-			return new Status(Status.StatusCode.ErrorInternalException, ioe.getMessage());
+		AllHostsData allHostsData = new AllHostsData();
+		int totalNumberOfContainers = 0, totalNumberOfContainersRunning=0, totalNumberOfContainersPaused=0, totalNumberOfContainersStopped=0;
+		int totalNumberOfImages = 0;
+		for ( String host:hosts) {	
+			HostData hostData = allHostsData.getHostData(host);
+			try {
+				DataCollector dataCollector = getCollector(host, env);
+				JsonNode containerInfo = dataCollector.collectContainerAndImageCount(JsonNode.class);
+				if ( containerInfo != null) {
+					BigInteger noOfContainers = getBigIntegerValue("Containers", containerInfo);
+					BigInteger noOfImages = getBigIntegerValue("Images", containerInfo);
+					BigInteger noOfContainersRunning = getBigIntegerValue("ContainersRunning", containerInfo);
+					BigInteger noOfContainersStopped = getBigIntegerValue("ContainersStopped", containerInfo);
+					BigInteger noOfContainersPaused = getBigIntegerValue("ContainersPaused", containerInfo);
+					totalNumberOfContainers += noOfContainers.intValue();
+					totalNumberOfContainersRunning += noOfContainersRunning.intValue();
+					totalNumberOfContainersPaused += noOfContainersPaused.intValue();
+					totalNumberOfContainersStopped += noOfContainersStopped.intValue();
+					totalNumberOfImages += noOfImages.intValue();
+					hostData.setNoOfContainers(noOfContainers);
+					hostData.setNoOfImages(noOfImages);
+					hostData.setNoOfContainersPaused(noOfContainersPaused);
+					hostData.setNoOfContainersRunning(noOfContainersRunning);
+					hostData.setNoOfContainersStopped(noOfContainersStopped);
+				}
+				ArrayNode containers = dataCollector.collectContainerList(ArrayNode.class);
+				// The key for the containersMap would be the containerName.
+				// The value of the containersMap would be another Map that would have CPUGroup or MemoryGroup or NetworkGroup as the keys and the value
+				// of this map would be another map (secondInnerMap). The key of the secondInnerMap would be metric name like usage, rx_bytes etc and the value
+				// would be the actual value.
+				log.log(Level.FINER, "Size=" + containers.size());
+				if (containers != null)
+				{
+					for (JsonNode container : containers)
+					{
+						String containerId = getStringValue("Id", container);
+						String containerName = getContainerName(container);
+						ContainerData containerData = hostData.getContainerData(containerName);
+						JsonNode containerStat = dataCollector.collectContainerData(containerId, JsonNode.class);
+						log.log(Level.FINER, "Done getting all the data");
+						populateContainerStat(containerStat, containerData, containerName, host);
+					}
+				}
+			}
+			catch (IOException ioe) {
+				log.log(Level.SEVERE, HelperUtils.getExceptionAsString(ioe));
+				return new Status(Status.StatusCode.ErrorInternalException, HelperUtils.getExceptionAsString(ioe));
+			}
 		}
+		log.log(Level.FINER, "TotalNumOfContainers=" + totalNumberOfContainers);
+		log.log(Level.FINER, "TotalNumOfImages=" + totalNumberOfImages);
+		populateDockerMetrics(allHostsData, totalNumberOfContainers, totalNumberOfContainersRunning, totalNumberOfContainersPaused, totalNumberOfContainersStopped, totalNumberOfImages, env);
+		return new Status(Status.StatusCode.Success);		
 	}
 
+	private void parseHostList(String hostList) {
+		String[] tokens = hostList.split(",");
+		if ( tokens == null || tokens.length == 0) {
+			return;
+		}
+		
+		for (int i=0; i<tokens.length; i++) {
+			hosts.add(tokens[i]);
+		}
+	}
+	
+	private DataCollector getCollector(String host, MonitorEnvironment env) throws Exception {
+		if (connectionType.equals(CONNECTION_TYPE_TCP_PORT)) {
+			String port = env.getConfigString(DOCKER_PORT);
+			if ( port == null || port.equals("") ) {
+				throw new Exception("Port number is not defined");
+			}
+			ConnectionConfig connectionConfig = new ConnectionConfig();
+			connectionConfig.setHost(host);
+			connectionConfig.setPort(new Integer(port).intValue());
+			connectionConfig.setProtocol(Protocol.HTTP);
+			ServerConfig serverConfig = new ServerConfig();
+			serverConfig.setConnectionConfig(connectionConfig);
+			dataCollector = new TCPSocketDataCollector(serverConfig);
+		}
+		else if (connectionType.equalsIgnoreCase(CONNECTION_TYPE_UNIX_SOCKET)) {
+			String sshOrLocal = env.getConfigString(SSH_OR_LOCAL);
+			UnixSocketDataCollector uCollector = new UnixSocketDataCollector();
+			if (sshOrLocal.equals(SSH)) {
+				String user = env.getConfigString(LOGIN_USER);
+				String pass = env.getConfigPassword(PASSWORD);
+				uCollector.setConnectionMode(SSH);
+				uCollector.setHost(host);
+				uCollector.setUser(user);
+				uCollector.setPassword(pass);
+				dataCollector = uCollector;
+			}
+			else {
+				//Using junixsocket library to read data from the docker.sock file. Load the library once once.
+				if ( !libraryLoaded) {
+					final String arch = System.getProperty("os.arch");
+					System.setProperty("org.newsclub.net.unix.library.path", System.getProperty("user.dir"));
+					if (arch.contains("64")) {
+						LibUtils.installNativeLibraryFromResources("libjunixsocket-linux-1.5-amd64.so");
+					}
+					else {
+						LibUtils.installNativeLibraryFromResources("libjunixsocket-linux-1.5-i386.so");					
+					}
+					libraryLoaded=true;
+				}
+				uCollector.setConnectionMode(LOCAL);
+				dataCollector = uCollector;
+			}
+		}
+		
+		return dataCollector;
+
+	}
 	private String getStringValue(String propertyName, JsonNode node)
 	{
 		JsonNode jsonNode = node.get(propertyName);
@@ -208,10 +454,10 @@ public class DockerMonitor implements Monitor {
 		return getStringValue("Id", container);
 	}
 
-	private void populateContainerStat(JsonNode node, Map<String, Map<String, Double>> containerMap, String containerName) {
-		getMemoryUsage(node, containerMap);
-		getCPUUsage(node, containerMap, containerName);
-		getNetworkUsage(node, containerMap, containerName);
+	private void populateContainerStat(JsonNode node, ContainerData containerData, String containerName, String host) {
+		getMemoryUsage(node, containerData.getGroup("MemoryGroup"));
+		getCPUUsage(node, containerData.getGroup("CPUGroup"), containerName, host);
+		getNetworkUsage(node, containerData.getGroup("NetworkGroup"), containerName, host);
 	}
 
 	private BigInteger getBigIntegerValue(String propertyName, JsonNode node)
@@ -229,29 +475,32 @@ public class DockerMonitor implements Monitor {
 		return null;
 	}
 
-	private void getMemoryUsage(JsonNode node, Map<String, Map<String, Double>> theMap)
+	private void getMemoryUsage(JsonNode node, GroupData memoryGroupData)
 	{
-		Map<String, Double> innerMap = new HashMap<String, Double>();
+//		Map<String, Double> innerMap = new HashMap<String, Double>();
 		JsonNode stats = node.get("memory_stats");
 		if (stats != null)
 		{
 			BigInteger usage = getBigIntegerValue("usage", stats);
 			BigInteger limit = getBigIntegerValue("limit", stats);
 			
-			innerMap.put(METRICS_MEMORY[0],new Double(usage.doubleValue()));
-			innerMap.put(METRICS_MEMORY[1], new Double(limit.doubleValue()));
+			memoryGroupData.putValue(METRICS_MEMORY[0],null,new Double(usage.doubleValue()));
+			memoryGroupData.putValue(METRICS_MEMORY[1],null,new Double(limit.doubleValue()));
+//			innerMap.put(METRICS_MEMORY[0],new Double(usage.doubleValue()));
+//			innerMap.put(METRICS_MEMORY[1], new Double(limit.doubleValue()));
 			if ((usage != null) && (limit != null)) {
-				innerMap.put(METRICS_MEMORY[2], percentage(usage.doubleValue(), limit.doubleValue()));
+//				innerMap.put(METRICS_MEMORY[2], percentage(usage.doubleValue(), limit.doubleValue()));
+				memoryGroupData.putValue(METRICS_MEMORY[2], null, percentage(usage.doubleValue(), limit.doubleValue()));
 			} else {
 				log.log(Level.INFO, "Cannot calculate Memory %, usage=" + usage +", " + "limit=" + limit);
 			}
-			theMap.put("MemoryGroup", innerMap);
+//			theMap.put("MemoryGroup", innerMap);
 		}
 	}
 	  
-	private void getCPUUsage(JsonNode node, Map<String, Map<String, Double>> theMap, String containerName)
+	private void getCPUUsage(JsonNode node, GroupData cpuGroupData, String containerName, String host)
 	{
-		Map<String, Double> innerMap = new HashMap<String, Double>();
+//		Map<String, Double> innerMap = new HashMap<String, Double>();
 		JsonNode stats = node.get("cpu_stats");
 		JsonNode cpuUsage;
 		if ((stats != null) && ((cpuUsage = stats.get("cpu_usage")) != null))
@@ -262,9 +511,14 @@ public class DockerMonitor implements Monitor {
 			BigInteger totalUsage = getBigIntegerValue("total_usage", cpuUsage);
 			BigInteger userModeUsage = getBigIntegerValue("usage_in_usermode", cpuUsage);
 			BigInteger systemUsage = getBigIntegerValue("system_cpu_usage", stats);
-			innerMap.put(METRICS_CPU[0], new Double(totalUsage.doubleValue()));
+/*			innerMap.put(METRICS_CPU[0], new Double(totalUsage.doubleValue()));
 			innerMap.put(METRICS_CPU[1], new Double(userModeUsage.doubleValue()));
 			innerMap.put(METRICS_CPU[2], new Double(systemUsage.doubleValue()));
+*/
+			cpuGroupData.putValue(METRICS_CPU[0],null, new Double(totalUsage.doubleValue()));
+			cpuGroupData.putValue(METRICS_CPU[1],null, new Double(userModeUsage.doubleValue()));
+			cpuGroupData.putValue(METRICS_CPU[2],null, new Double(systemUsage.doubleValue()));
+			
 			String cpuCacheTotalUsageKey = host + "|" + containerName + "|" + METRICS_CPU[0];
 			Double prevTotalCPUUsage = cpuCache.get(cpuCacheTotalUsageKey);
 			String cpuCacheUsageInUsermodeKey = host + "|" + containerName + "|" + METRICS_CPU[1];
@@ -303,65 +557,87 @@ public class DockerMonitor implements Monitor {
 			cpuCache.put(cpuCacheTotalUsageKey, new Double(totalUsage.doubleValue()));
 			cpuCache.put(cpuCacheUsageInUsermodeKey, new Double(userModeUsage.doubleValue()));
 			cpuCache.put(cpuCacheSystemCPUUsageKey, new Double(systemUsage.doubleValue()));
-			
+
+			cpuGroupData.putValue(METRICS_CPU[3], null, totalCPUUsageDiff);
+			cpuGroupData.putValue(METRICS_CPU[4], null, usageInUsermodeDiff);
+			cpuGroupData.putValue(METRICS_CPU[5], null, systemCPUUsageDiff);
+			cpuGroupData.putValue(METRICS_CPU[6], null, calculateCPUPercent(totalCPUUsageDiff, systemCPUUsageDiff, percpuUsage.size()));
+
+			/*
 			innerMap.put(METRICS_CPU[3], totalCPUUsageDiff);
 			innerMap.put(METRICS_CPU[4], usageInUsermodeDiff);
 			innerMap.put(METRICS_CPU[5], systemCPUUsageDiff);
 			innerMap.put(METRICS_CPU[6], calculateCPUPercent(totalCPUUsageDiff, systemCPUUsageDiff, percpuUsage.size()));
-			
+			*/
 		}	
-		theMap.put("CPUGroup", innerMap);
+//		theMap.put("CPUGroup", innerMap);
 	}
 
-	private void getNetworkUsage(JsonNode node, Map<String,Map<String, Double>> theMap, String containerName) {
-		Map<String, Double> innerMap = new HashMap<String, Double>();
-		JsonNode netStats = node.get("network");
+	private void getNetworkUsage(JsonNode node, GroupData networkGroupData, String containerName, String host) {
+//		Map<String, Double> innerMap = new HashMap<String, Double>();
+		JsonNode netStats = node.get("networks");
 		if (netStats != null) 
 		{
-			BigInteger rxBytes = getBigIntegerValue(METRICS_NETWORK[0], netStats);
-			BigInteger txBytes = getBigIntegerValue(METRICS_NETWORK[1], netStats);
-			BigInteger rxPacket = getBigIntegerValue(METRICS_NETWORK[2], netStats);
-			BigInteger txPacket = getBigIntegerValue(METRICS_NETWORK[3], netStats);
-			
-			innerMap.put(METRICS_NETWORK[0], new Double(rxBytes.doubleValue()));
-			innerMap.put(METRICS_NETWORK[1], new Double(txBytes.doubleValue()));
-			innerMap.put(METRICS_NETWORK[2], new Double(rxPacket.doubleValue()));
-			innerMap.put(METRICS_NETWORK[3], new Double(txPacket.doubleValue()));
-			
-			String rxBytesKey = host + "|" + containerName + "|" + METRICS_NETWORK[0];
-			Double prevRxBytes = networkCache.get(rxBytesKey);
-			String txBytesKey = host + "|" + containerName + "|" + METRICS_NETWORK[1];
-			Double prevTxBytes = networkCache.get(txBytesKey);
-			String rxPacketsKey = host + "|" + containerName + "|" + METRICS_NETWORK[2];
-			Double prevRxPackets = networkCache.get(rxPacketsKey);
-			String txPacketsKey = host + "|" + containerName + "|" + METRICS_NETWORK[3];
-			Double prevTxPackets = networkCache.get(txPacketsKey);
-			
-			Double rxBytesDiff=null, txBytesDiff=null, rxPacketDiff=null, txPacketDiff=null;
-			if ( prevRxBytes == null || prevTxBytes == null || prevRxPackets == null || prevTxPackets == null) {
-				rxBytesDiff = new Double(0);
-				txBytesDiff = new Double(0);
-				rxPacketDiff = new Double(0);
-				txPacketDiff = new Double(0);
-			}
-			else {
-				rxBytesDiff = new Double(Math.abs(rxBytes.doubleValue() - prevRxBytes.doubleValue()));
-				txBytesDiff = new Double(Math.abs(txBytes.doubleValue() - prevTxBytes.doubleValue()));
-				rxPacketDiff = new Double(Math.abs(rxPacket.doubleValue() - prevRxPackets.doubleValue()));
-				txPacketDiff = new Double(Math.abs(txPacket.doubleValue() - prevTxPackets.doubleValue()));
-			}
+			Iterator<String> fieldNames = netStats.getFieldNames();
+			while (fieldNames.hasNext()) {
+				String interfaceName = fieldNames.next();
+				log.log(Level.FINER, "Network.fieldName=" + interfaceName + "\n");
+				JsonNode networkData = netStats.get(interfaceName);
+				log.log(Level.FINER, "Network.JsonValue=" + networkData.toString());
+				BigInteger rxBytes = getBigIntegerValue(METRICS_NETWORK[0], networkData);
+				BigInteger txBytes = getBigIntegerValue(METRICS_NETWORK[1], networkData);
+				BigInteger rxPacket = getBigIntegerValue(METRICS_NETWORK[2], networkData);
+				BigInteger txPacket = getBigIntegerValue(METRICS_NETWORK[3], networkData);
 
-			networkCache.put(rxBytesKey, new Double(rxBytes.doubleValue()));
-			networkCache.put(txBytesKey, new Double(txBytes.doubleValue()));
-			networkCache.put(rxPacketsKey, new Double(rxPacket.doubleValue()));
-			networkCache.put(txPacketsKey, new Double(txPacket.doubleValue()));
+				networkGroupData.putValue(interfaceName, METRICS_NETWORK[0], new Double(rxBytes.doubleValue()));
+				networkGroupData.putValue(interfaceName, METRICS_NETWORK[1], new Double(txBytes.doubleValue()));
+				networkGroupData.putValue(interfaceName, METRICS_NETWORK[2], new Double(rxPacket.doubleValue()));
+				networkGroupData.putValue(interfaceName, METRICS_NETWORK[3], new Double(txPacket.doubleValue()));
+/*				Map<String, Double> interfaceMap = new HashMap<String, Double>();
+				interfaceMap.put(METRICS_NETWORK[0], new Double(rxBytes.doubleValue()));
+				interfaceMap.put(METRICS_NETWORK[1], new Double(txBytes.doubleValue()));
+				interfaceMap.put(METRICS_NETWORK[2], new Double(rxPacket.doubleValue()));
+				interfaceMap.put(METRICS_NETWORK[3], new Double(txPacket.doubleValue()));
+*/
+				String rxBytesKey = host + "|" + containerName + "|" + interfaceName + "|" + METRICS_NETWORK[0];
+				Double prevRxBytes = networkCache.get(rxBytesKey);
+				String txBytesKey = host + "|" + containerName + "|" + interfaceName + "|" + METRICS_NETWORK[1];
+				Double prevTxBytes = networkCache.get(txBytesKey);
+				String rxPacketsKey = host + "|" + containerName + "|" + interfaceName + "|" + METRICS_NETWORK[2];
+				Double prevRxPackets = networkCache.get(rxPacketsKey);
+				String txPacketsKey = host + "|" + containerName + "|" + interfaceName + "|" + METRICS_NETWORK[3];
+				Double prevTxPackets = networkCache.get(txPacketsKey);
 			
-			innerMap.put(METRICS_NETWORK[4], rxBytesDiff);
-			innerMap.put(METRICS_NETWORK[5], txBytesDiff);
-			innerMap.put(METRICS_NETWORK[6], rxPacketDiff);
-			innerMap.put(METRICS_NETWORK[7], txPacketDiff);
+				Double rxBytesDiff=null, txBytesDiff=null, rxPacketDiff=null, txPacketDiff=null;
+				if ( prevRxBytes == null || prevTxBytes == null || prevRxPackets == null || prevTxPackets == null) {
+					rxBytesDiff = new Double(0);
+					txBytesDiff = new Double(0);
+					rxPacketDiff = new Double(0);
+					txPacketDiff = new Double(0);
+				}
+				else {
+					rxBytesDiff = new Double(Math.abs(rxBytes.doubleValue() - prevRxBytes.doubleValue()));
+					txBytesDiff = new Double(Math.abs(txBytes.doubleValue() - prevTxBytes.doubleValue()));
+					rxPacketDiff = new Double(Math.abs(rxPacket.doubleValue() - prevRxPackets.doubleValue()));
+					txPacketDiff = new Double(Math.abs(txPacket.doubleValue() - prevTxPackets.doubleValue()));
+				}
+
+				networkCache.put(rxBytesKey, new Double(rxBytes.doubleValue()));
+				networkCache.put(txBytesKey, new Double(txBytes.doubleValue()));
+				networkCache.put(rxPacketsKey, new Double(rxPacket.doubleValue()));
+				networkCache.put(txPacketsKey, new Double(txPacket.doubleValue()));
+			
+				networkGroupData.putValue(interfaceName, METRICS_NETWORK[4], rxBytesDiff);
+				networkGroupData.putValue(interfaceName, METRICS_NETWORK[5], txBytesDiff);
+				networkGroupData.putValue(interfaceName, METRICS_NETWORK[6], rxPacketDiff);
+				networkGroupData.putValue(interfaceName, METRICS_NETWORK[7], txPacketDiff);
+/*				interfaceMap.put(METRICS_NETWORK[4], rxBytesDiff);
+				interfaceMap.put(METRICS_NETWORK[5], txBytesDiff);
+				interfaceMap.put(METRICS_NETWORK[6], rxPacketDiff);
+				interfaceMap.put(METRICS_NETWORK[7], txPacketDiff);
+*/			}
 		}
-		theMap.put("NetworkGroup", innerMap);
+//		theMap.put("NetworkGroup", innerMap);
 	}
 	
 	private Double percentage(double i1, double i2)
@@ -386,77 +662,160 @@ public class DockerMonitor implements Monitor {
 		return new Double(0);
 	}
 	
-	private void populateDockerMetrics(Map<String, Map<String, Map<String, Double>>> containers, Map<String, Double> containerInfoMap, MonitorEnvironment env) {
-		for (int index = 0; index < METRICS_CONTAINER_INFO.length; index++) {
-			Collection<MonitorMeasure> monitorMeasures = env.getMonitorMeasures("CIGroup", METRICS_CONTAINER_INFO[index]);
-			for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
-				subscribedMonitorMeasure.setValue(containerInfoMap.get(METRICS_CONTAINER_INFO[index]));
-			}
-		}		
-		Set<String> keySet = containers.keySet();
-		log.log(Level.FINER, "size of the map=" + keySet.size());
-		for (int index = 0; index < METRICS_CPU.length; index++) {
-			for (String key : keySet) {
-				Map<String, Map<String, Double>> containerMap = containers.get(key);
-				Map<String, Double> cpuMap = containerMap.get("CPUGroup");
-				Collection<MonitorMeasure> monitorMeasures = env.getMonitorMeasures("CPUGroup", METRICS_CPU[index]);
-				for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
-					MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Container Name", key);
-					dynamicMeasure.setValue(cpuMap.get(METRICS_CPU[index]));
-					}
-			}
+	private void populateDockerMetrics(AllHostsData allHostsData, int totalContainerCount, int totalContainerRunning, int totalContainerPaused, int totalContainerStopped, int totalImageCount, MonitorEnvironment env) {
+		Collection<MonitorMeasure> monitorMeasures = env.getMonitorMeasures(METRIC_GROUP[4], METRICS_SUMMARY[0]);
+		for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+			log.log(Level.FINER, "Populating value for totalContainerCount=" + totalContainerCount);
+			subscribedMonitorMeasure.setValue(totalContainerCount);
 		}
 
-		// Populating Memory Stats
-		keySet = containers.keySet();
-		for (int index = 0; index < METRICS_MEMORY.length; index++) {
-			for (String key : keySet) {
-				Map<String, Map<String, Double>> containerMap = containers.get(key);
-				Map<String, Double> memoryMap = containerMap.get("MemoryGroup");
-				Collection<MonitorMeasure> monitorMeasures = env.getMonitorMeasures("MemoryGroup", METRICS_MEMORY[index]);
-				for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
-					MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Container Name", key);
-					dynamicMeasure.setValue(memoryMap.get(METRICS_MEMORY[index]));
-				}
-			}
+		monitorMeasures = env.getMonitorMeasures(METRIC_GROUP[4], METRICS_SUMMARY[1]);
+		for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+			log.log(Level.FINER, "Populating value for totalContainerRunning=" + totalContainerRunning);
+			subscribedMonitorMeasure.setValue(totalContainerRunning);
 		}
-		
-		// Populating Network Stats
-		log.log(Level.FINER, "Done with Memory.Starting Network");
-		keySet = containers.keySet();
-		for (int index = 0; index < METRICS_NETWORK.length; index++) {
-			for (String key : keySet) {
-				Map<String, Map<String, Double>> containerMap = containers.get(key);
-				Map<String, Double> networkMap = containerMap.get("NetworkGroup");
-				Collection<MonitorMeasure> monitorMeasures = env.getMonitorMeasures("NetworkGroup", METRICS_NETWORK[index]);
-				for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
-					MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Container Name", key);
-					dynamicMeasure.setValue(networkMap.get(METRICS_NETWORK[index]));
+
+		monitorMeasures = env.getMonitorMeasures(METRIC_GROUP[4], METRICS_SUMMARY[2]);
+		for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+			log.log(Level.FINER, "Populating value for totalContainerStopped=" + totalContainerStopped);
+			subscribedMonitorMeasure.setValue(totalContainerStopped);
+		}
+
+		monitorMeasures = env.getMonitorMeasures(METRIC_GROUP[4], METRICS_SUMMARY[3]);
+		for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+			log.log(Level.FINER, "Populating value for totalContainerPaused=" + totalImageCount);
+			subscribedMonitorMeasure.setValue(totalContainerPaused);
+		}
+
+		monitorMeasures = env.getMonitorMeasures(METRIC_GROUP[4], METRICS_SUMMARY[4]);
+		for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+			log.log(Level.FINER, "Populating value for totalImageCount=" + totalImageCount);
+			subscribedMonitorMeasure.setValue(totalImageCount);
+		}
+
+		Set<String> hostSet = allHostsData.getAllHostsSet();
+		for (String hostName : hostSet) {	
+			log.log(Level.FINE, "Processing host="+ hostName);
+			//Map<String, Map<String, Map<String, Double>>> containers = allContainers.get(hostName);
+			HostData hostData = allHostsData.getHostData(hostName);
+			monitorMeasures = env.getMonitorMeasures(METRIC_GROUP[3], METRICS_HOST[0]);
+			for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+				MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Host Name", hostName);
+				dynamicMeasure.setValue(hostData.getNoOfContainers().doubleValue());
+			}
+
+			monitorMeasures = env.getMonitorMeasures(METRIC_GROUP[3], METRICS_HOST[1]);
+			for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+				MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Host Name", hostName);
+				dynamicMeasure.setValue(hostData.getNoOfContainersRunning().doubleValue());
+			}
+
+			monitorMeasures = env.getMonitorMeasures(METRIC_GROUP[3], METRICS_HOST[2]);
+			for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+				MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Host Name", hostName);
+				dynamicMeasure.setValue(hostData.getNoOfContainersStopped().doubleValue());
+			}
+
+			monitorMeasures = env.getMonitorMeasures(METRIC_GROUP[3], METRICS_HOST[3]);
+			for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+				MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Host Name", hostName);
+				dynamicMeasure.setValue(hostData.getNoOfContainersPaused().doubleValue());
+			}
+
+			monitorMeasures = env.getMonitorMeasures(METRIC_GROUP[3], METRICS_HOST[4]);
+			for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+				MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Host Name", hostName);
+				dynamicMeasure.setValue(hostData.getNoOfImages().doubleValue());
+			}
+
+			Set<String> keySet = hostData.getAllContainersSet();
+			log.log(Level.FINE, "size of the container data set for " + hostName +  "=" + keySet.size());
+
+			for (String containerName : keySet) {
+				ContainerData containerData = hostData.getContainerData(containerName);
+				GroupData cpuData = containerData.getGroup(METRIC_GROUP[0]);
+				for (int index = 0; index < METRICS_CPU.length; index++) {
+//					Map<String, Map<String, Double>> containerMap = containers.get(key);
+//					Map<String, Double> cpuMap = containerMap.get("CPUGroup");
+					monitorMeasures = env.getMonitorMeasures(METRIC_GROUP[0], METRICS_CPU[index]);
+					for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+						MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Container Name", hostName + ":" + containerName);
+						dynamicMeasure.setValue(cpuData.getValue(METRICS_CPU[index],null));
+					}
+				}
+
+				// Populating Memory Stats
+				GroupData memoryData = containerData.getGroup(METRIC_GROUP[1]);
+				for (int index = 0; index < METRICS_MEMORY.length; index++) {
+//					Map<String, Map<String, Double>> containerMap = containers.get(key);
+//					Map<String, Double> cpuMap = containerMap.get("CPUGroup");
+					monitorMeasures = env.getMonitorMeasures(METRIC_GROUP[1], METRICS_MEMORY[index]);
+					for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+						MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Container Name", hostName + ":" + containerName);
+						dynamicMeasure.setValue(memoryData.getValue(METRICS_MEMORY[index],null));
+					}
+				}
+
+				// Populating Network Stats
+				log.log(Level.FINER, "Done with Memory.Starting Network");
+				NetworkGroupData networkData = (NetworkGroupData) containerData.getGroup(METRIC_GROUP[2]);
+				Set<String> interfaceSet = networkData.getAllInterfaceSet();
+				for (String interfaceName: interfaceSet) {					
+					for (int index = 0; index < METRICS_NETWORK.length; index++) {
+						monitorMeasures = env.getMonitorMeasures(METRIC_GROUP[2], METRICS_NETWORK[index]);
+						for (MonitorMeasure subscribedMonitorMeasure : monitorMeasures) {
+							MonitorMeasure dynamicMeasure = env.createDynamicMeasure(subscribedMonitorMeasure, "Container Name", hostName + ":" + containerName + ":" + interfaceName);
+							dynamicMeasure.setValue(networkData.getValue(interfaceName, METRICS_NETWORK[index]));
+						}
+					}
 				}
 			}
 		}
 	}
 	
-/*	public static String loadLibrary() throws IOException {
-		InputStream in = DockerMonitor.class.getClassLoader().getResourceAsStream("/res/libjunixsocket-linux-1.5-amd64.so");
-		String tmpDir = System.getProperty("java.io.tmpdir");
-		File socketSoFile = new File(tmpDir, "libjunixsocket-linux-1.5-amd64.so");
-		FileOutputStream out = new FileOutputStream(socketSoFile);
-		copy(in, out);
-		in.close();
-		out.close();
-		return socketSoFile.getAbsolutePath();
-	}
-	
-	public static final void copy(final InputStream in, final OutputStream out) throws IOException {
-		final byte buffer[] = new byte[1024];
-		int read = in.read(buffer, 0, buffer.length);
-		while (read > 0) {
-			out.write(buffer);
-			read = in.read(buffer, 0, read);
+	private void populateHostList(MonitorEnvironment env) throws IOException {
+		hosts.clear();
+		boolean useAuth = env.getConfigBoolean(MESOS_USE_AUTHENTICATION).booleanValue();
+		String userId=null, password=null;
+		if ( useAuth) {
+			userId = env.getConfigString(MESOS_USER_ID);
+			password = env.getConfigPassword(MESOS_PASSWORD);
 		}
+		String port = env.getConfigString(MESOS_MASTER_PORT);
+		ConnectionConfig connectionConfig = new ConnectionConfig();
+		connectionConfig.setHost(env.getConfigString(MESOS_MASTER_IP));
+		connectionConfig.setPort(new Integer(port).intValue());
+		connectionConfig.setProtocol(Protocol.HTTP);
+		ServerConfig serverConfig = new ServerConfig();
+		serverConfig.setConnectionConfig(connectionConfig);
+		if (useAuth) {
+			serverConfig.setCredentials(userId, password);
+		}
+		Request request = new Request();
+		request.setPath("/master/slaves");
+		String reply = request.execute(serverConfig, true);
+		if ( reply == null ) {
+			throw new IOException("Recevied null value from the master/slaves call");
+		}
+		ObjectMapper objMapper = new ObjectMapper();
+		log.log(Level.FINER, "About to convert this JSON for registry\n" + reply);
+		JsonNode replyNode = objMapper.readValue(reply, JsonNode.class);
+//		JsonNode masterNode = replyNode.get("master");
+//		String masterHostName = masterNode.get("info").get("hostname").getTextValue();
+//		hosts.add(masterHostName);
+//		JsonNode slaves = replyNode.get("slaves");
+//		log.log(Level.FINER, "About to convert this JSON for slaves\n" + slaves.toString());
+		ArrayNode slavesNode = (ArrayNode) replyNode.get("slaves");
+		Iterator<JsonNode> slaveIterator = slavesNode.iterator();
+		while (slaveIterator.hasNext()) {
+		    JsonNode slaveNode = slaveIterator.next();
+//		    JsonNode infoNode = slaveNode.get("info");
+		    String hostName = slaveNode.get("hostname").getTextValue();
+		    hosts.add(hostName);
+		    log.log(Level.SEVERE, "HostName = " + hostName);
+		}
+//		hosts.add("node1");
 	}
-*/
 	/**
 	 * Shuts the Plugin down and frees resources. This method is called in the
 	 * following cases:

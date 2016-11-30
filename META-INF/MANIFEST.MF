@@ -1,11 +1,11 @@
 Manifest-Version: 1.0
-Require-Bundle: org.eclipse.core.runtime,com.dynatrace.diagnostics.sdk
-Bundle-Vendor: Dynatrace
+Bundle-SymbolicName: com.dynatrace.docker.plugin;singleton:=true
+Bundle-Version: 1.0.7
+Bundle-Name: Docker Monitor
 Bundle-ClassPath: .,lib/ganymed-ssh2-build210.jar,lib/jackson-all-1.9.
  9.jar,lib/junixsocket-1.3.jar,lib/org.apache.commons.httpclient.jar
-Bundle-Version: 1.0.4
-Bundle-Name: Docker Monitor
+Require-Bundle: com.dynatrace.diagnostics.sdk,org.eclipse.core.runtime
 Bundle-ManifestVersion: 2
-Bundle-SymbolicName: com.dynatrace.docker.plugin;singleton:=true
+Bundle-Vendor: Dynatrace
 Import-Package: org.apache.commons.httpclient
 

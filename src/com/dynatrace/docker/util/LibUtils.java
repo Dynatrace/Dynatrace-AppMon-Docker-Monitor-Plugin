@@ -15,6 +15,7 @@ import org.eclipse.core.runtime.Platform;
 import com.dynatrace.docker.DockerMonitor;
 
 public class LibUtils {
+	@SuppressWarnings("deprecation")
 	public static void installNativeLibraryFromResources(String pLibraryName) throws IOException, URISyntaxException {
 		// Get resource file location (Source)
 		URL sourceFileURL = LibUtils.class.getResource("/res/" + pLibraryName);

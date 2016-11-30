@@ -10,11 +10,50 @@
       <supportlevel value="unsupported" />
     </information>
     <configuration>
+      <property key="dockerDeployment" label="Docker Deployment" type="list" description="Choose whether the docker deployment is through Mesos/Marathon or without any management tool" default="Mesos/Marathon">
+        <list>
+          <item value="Mesos/Marathon" />
+          <item value="Unmanaged" />
+        </list>
+      </property>
+      <property key="mesosHost" label="Mesos Master IP/Host" type="string" description="Mesos master host and IP address" default="" multiline="false">
+        <visibility>
+          <rule key="dockerDeployment" value="Mesos/Marathon" />
+        </visibility>
+      </property>
+      <property key="mesosMasterPort" label="Mesos Master Port" type="string" description="Port number on which the Mesos master is listening. The default value is 5050&#x9;&#x9;" default="5050" multiline="false">
+        <visibility>
+          <rule key="dockerDeployment" value="Mesos/Marathon" />
+        </visibility>
+      </property>
+      <property key="mesosUseAuthentication" label="Use Authentication?" type="boolean" description="My property description ..." default="false">
+        <visibility>
+          <rule key="dockerDeployment" value="Mesos/Marathon" />
+        </visibility>
+      </property>
+      <property key="mesosUserId" label="Mesos User Id" type="string" description="UserId for mesos authentication" default="" multiline="false">
+        <visibility>
+          <rule key="useAuthentication" value="true" />
+        </visibility>
+      </property>
+      <property key="mesosPassword" label="Mesos Password" type="password" description="Password for Mesos authentication" default="">
+        <visibility>
+          <rule key="useAuthentication" value="true" />
+        </visibility>
+      </property>
+      <property key="dockerHosts" label="Docker Host(s)" type="string" description="List all the host(s) running Docker daemon. Separate the host names or IP addresses by comma(,)" default="" multiline="true">
+        <visibility>
+          <rule key="dockerDeployment" value="Unmanaged" />
+        </visibility>
+      </property>
       <property key="connectionType" label="Connection Type" type="list" description="My property description ..." default="Unix Socket">
         <list>
           <item value="Unix Socket" />
           <item value="TCP Port" />
         </list>
+        <visibility>
+          <rule key="dockerDeployment" value="Unmanaged" />
+        </visibility>
       </property>
       <property key="sshOrLocal" label="SSH or Local" type="list" description="My property description ..." default="SSH">
         <list>
@@ -25,18 +64,19 @@
           <rule key="connectionType" value="Unix Socket" />
         </visibility>
       </property>
-      <property key="loginUser" label="Login User" type="string" description="My property description ..." default="" multiline="false">
+      <property key="loginUser" label="SSH Login User" type="string" description="My property description ..." default="" multiline="false">
         <visibility>
           <rule key="sshOrLocal" value="SSH" />
         </visibility>
       </property>
-      <property key="password" label="Password" type="password" description="My property description ..." default="">
+      <property key="password" label="SSH Password" type="password" description="My property description ..." default="">
         <visibility>
           <rule key="sshOrLocal" value="SSH" />
         </visibility>
       </property>
       <property key="dockerPort" label="Docker Port" type="string" description="My property description ..." default="" multiline="false">
         <visibility>
+          <rule key="dockerDeployment" value="Mesos/Marathon" />
           <rule key="connectionType" value="TCP Port" />
         </visibility>
       </property>
@@ -75,11 +115,22 @@
       <metric defaultrate="purepath" name="tx_packets_delta" unit="bytes" description="My metric description ..." />
     </metricgroup>
   </extension>
-  <extension point="com.dynatrace.diagnostics.pdk.monitormetricgroup" id="com.dynatrace.docker.plugin.monitor.metricgroup4" name="CIGroup">
+  <extension point="com.dynatrace.diagnostics.pdk.monitormetricgroup" id="com.dynatrace.docker.plugin.monitor.metricgroup4" name="HostGroup">
     <metricgroup monitorid="com.dynatrace.docker.plugin.monitor">
-      <metric defaultrate="purepath" name="containerCount" unit="number" description="My metric description ..." />
-      <metric defaultrate="purepath" name="imageCount" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="hostContainerCount" unit="number" description="Number of containers running on this host" />
+      <metric defaultrate="purepath" name="hostImageCount" unit="number" description="Number of docker images on this host." />
+      <metric defaultrate="purepath" name="hostContainerRunning" unit="number" description="Number of containers running on the host" />
+      <metric defaultrate="purepath" name="hostContainerPaused" unit="number" description="Number of containers in the pause state on the host" />
+      <metric defaultrate="purepath" name="hostContainerStopped" unit="number" description="Number of containers in stopped state on the host." />
+    </metricgroup>
+  </extension>
+  <extension point="com.dynatrace.diagnostics.pdk.monitormetricgroup" id="com.dynatrace.docker.plugin.monitor.metricgroup5" name="SummaryGroup">
+    <metricgroup monitorid="com.dynatrace.docker.plugin.monitor">
+      <metric defaultrate="purepath" name="totalImageCount" unit="number" description="Total number of docker images across all the hosts." />
+      <metric defaultrate="purepath" name="totalContainerCount" unit="number" description="Total number of containers running across all the hosts." />
+      <metric defaultrate="purepath" name="totalContainerRunning" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="totalContainerPaused" unit="number" description="My metric description ..." />
+      <metric defaultrate="purepath" name="totalContainerStopped" unit="number" description="My metric description ..." />
     </metricgroup>
   </extension>
 </plugin>
-

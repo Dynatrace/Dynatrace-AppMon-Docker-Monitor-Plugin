@@ -35,8 +35,8 @@ public final class IOUtils {
 		final byte buffer[] = new byte[1024];
 		int read = in.read(buffer, 0, buffer.length);
 		while (read > 0) {
-			out.write(buffer);
-			read = in.read(buffer, 0, read);
+			out.write(buffer,0, read);
+			read = in.read(buffer, 0, buffer.length);
 		}
 	}
 	
