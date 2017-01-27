@@ -33,12 +33,12 @@
       </property>
       <property key="mesosUserId" label="Mesos User Id" type="string" description="UserId for mesos authentication" default="" multiline="false">
         <visibility>
-          <rule key="useAuthentication" value="true" />
+          <rule key="mesosUseAuthentication" value="true" />
         </visibility>
       </property>
       <property key="mesosPassword" label="Mesos Password" type="password" description="Password for Mesos authentication" default="">
         <visibility>
-          <rule key="useAuthentication" value="true" />
+          <rule key="mesosUseAuthentication" value="true" />
         </visibility>
       </property>
       <property key="dockerHosts" label="Docker Host(s)" type="string" description="List all the host(s) running Docker daemon. Separate the host names or IP addresses by comma(,)" default="" multiline="true">
@@ -78,6 +78,28 @@
         <visibility>
           <rule key="dockerDeployment" value="Mesos/Marathon" />
           <rule key="connectionType" value="TCP Port" />
+        </visibility>
+      </property>
+      <property key="dockerProtocol" label="Docker Protocol" type="list" description="Whether HTTP or HTTPS" default="HTTP">
+        <list>
+          <item value="HTTP" />
+          <item value="HTTPS" />
+        </list>
+        <visibility>
+          <rule key="dockerDeployment" value="Mesos/Marathon" />
+          <rule key="connectionType" value="TCP Port" />
+        </visibility>
+      </property>
+      <property key="dockerCertificateFile" label="Certificate File Location" type="string" description="Absolute path to the certification file (.pem)" default="" multiline="false">
+        <visibility>
+          <rule key="dockerDeployment" value="Mesos/Marathon" />
+          <rule key="dockerProtocol" value="HTTPS" />
+        </visibility>
+      </property>
+      <property key="dockerCertificateSelfSigned" label="Certificate Self Signed" type="boolean" description="True if you are not using CA to sign the certificate" default="">
+        <visibility>
+          <rule key="dockerDeployment" value="Mesos/Marathon" />
+          <rule key="dockerProtocol" value="HTTPS" />
         </visibility>
       </property>
     </configuration>

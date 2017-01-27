@@ -69,6 +69,9 @@ public class DockerMonitor implements Monitor {
 	private static final String LOGIN_USER = "loginUser";
 	private static final String PASSWORD = "password";
 	private static final String DOCKER_PORT = "dockerPort";
+	private static final String DOCKER_PROTOCOL = "dockerProtocol";	
+	private static final String DOCKER_CERTIFICATE_FILE = "dockerCertificateFile";
+	private static final String DOCKER_CERTIFICATE_SELF_SIGNED = "dockerCertificateSelfSigned";
 	private static final String MESOS = "Mesos/Marathon";
 	private static final String UNMANAGED = "Unmanaged";
 	private static final String[] METRIC_GROUP = { "CPUGroup", "MemoryGroup", "NetworkGroup", "HostGroup", "SummaryGroup"};
@@ -312,7 +315,7 @@ public class DockerMonitor implements Monitor {
 				if (hosts.isEmpty()) {
 					return new Status(Status.StatusCode.ErrorInfrastructure, "Unable to retreive the host lists from Mesos enironment");
 				}
-				else {
+				else if (log.getLevel() == Level.FINER){
 					for (String host:hosts) {
 						log.log(Level.FINER, "Hostname=" + host);
 					}
@@ -395,10 +398,28 @@ public class DockerMonitor implements Monitor {
 			if ( port == null || port.equals("") ) {
 				throw new Exception("Port number is not defined");
 			}
+			String dockerProtocol = env.getConfigString(DOCKER_PROTOCOL);
+			String dockerCertificateFile = null;
+			boolean isSelfSigned=false;
+			log.log(Level.FINER, "Protocol=" + dockerProtocol);
+			if ( dockerProtocol.equalsIgnoreCase(Protocol.HTTPS.name())) {
+				dockerCertificateFile = env.getConfigString(DOCKER_CERTIFICATE_FILE);
+				log.log(Level.FINER, "CertificateFile=" + dockerCertificateFile );
+				if (dockerCertificateFile == null || dockerCertificateFile.isEmpty()) {
+					throw new Exception("Certificate file cannot be empty for HTTPS connection.");
+				}
+				isSelfSigned = env.getConfigBoolean(DOCKER_CERTIFICATE_SELF_SIGNED).booleanValue(); 
+			}
 			ConnectionConfig connectionConfig = new ConnectionConfig();
 			connectionConfig.setHost(host);
 			connectionConfig.setPort(new Integer(port).intValue());
-			connectionConfig.setProtocol(Protocol.HTTP);
+			connectionConfig.setProtocol(dockerProtocol.equalsIgnoreCase(Protocol.HTTP.name()) ? Protocol.HTTP : Protocol.HTTPS);
+			//log.log(Level.FINER,  "Protocol=" + connectionConfig.getProtocol().name());
+			//log.log(Level.FINER, "Certificate file=" + dockerCertificateFile);
+			if (dockerCertificateFile != null) {
+				connectionConfig.setCertificateFile(dockerCertificateFile);
+			}
+			connectionConfig.setIsSelfSigned(isSelfSigned);
 			ServerConfig serverConfig = new ServerConfig();
 			serverConfig.setConnectionConfig(connectionConfig);
 			dataCollector = new TCPSocketDataCollector(serverConfig);

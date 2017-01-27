@@ -38,10 +38,14 @@ public final class ConnectionConfig {
 	static final String ATTRIBUTE_PROTOCOL	= "protocol";
 	static final String ATTRIBUTE_HOST		= "host";
 	static final String ATTRIBUTE_PORT		= "port";
+	static final String CERTIFICATE_FILE = "certificateFile";
+	static final String IS_SELF_SIGNED = "isSelfSigned";
 	
 	private Protocol protocol = null;
 	private String host = null;
 	private int port = UNDEFINED_PORT;
+	private String certificateFile;
+	private boolean isSelfSigned;
 	
 	public ConnectionConfig() {
 		
@@ -68,6 +72,22 @@ public final class ConnectionConfig {
 	 */
 	public final void setProtocol(final Protocol protocol) {
 		this.protocol = protocol;
+	}
+	
+	public final void setCertificateFile (String certificateFile) {
+		this.certificateFile = certificateFile;
+	}
+	
+	public final String getCertificateFile() {
+		return this.certificateFile;
+	}
+	
+	public final void setIsSelfSigned(boolean signed) {
+		this.isSelfSigned = signed;
+	}
+	
+	public final boolean getIsSelfSigned() {
+		return this.isSelfSigned;
 	}
 	
 	/**

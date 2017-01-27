@@ -3,11 +3,16 @@ package com.dynatrace.docker.rest;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.URL;
+import java.security.KeyManagementException;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.cert.CertificateException;
 import java.util.Objects;
 
 import com.dynatrace.docker.rest.HTTPClient.Method;
 import com.dynatrace.docker.rest.config.ConnectionConfig;
 import com.dynatrace.docker.rest.config.ServerConfig;
+import com.dynatrace.docker.util.Protocol;
 
 /**
  * Base class for all REST Requests to be executed to the dynaTrace Server
@@ -20,7 +25,6 @@ public class Request {
 	static final String ERR_MSG_INVALID_SERVER_CONFIG =
 			"Server Config is not valid".intern();
 	
-	private static final HTTPClient httpClient = new HTTPClient();
 	private String path = null;
 	/**
 	 * Executes the REST Request to the dynaTrace Server
@@ -38,10 +42,29 @@ public class Request {
 		}
 		final ConnectionConfig connectionConfig = config.getConnectionConfig();
 		final URL url = connectionConfig.createURL(getPath());
-		String responseStr = httpClient.request(
-				url,
-				Method.GET,
-				config.getCredentials(), unlimitedRead);
+		String responseStr=null;
+		if (connectionConfig.getProtocol() == Protocol.HTTP) {
+			HTTPClient httpClient = new HTTPClient();
+			responseStr = httpClient.request(
+					url,
+					Method.GET,
+					config.getCredentials(), unlimitedRead);
+		}
+		else {
+			HTTPSClient httpsClient = new HTTPSClient();
+			try {
+			responseStr = httpsClient.request(
+					url,
+					Method.GET,
+					connectionConfig.getCertificateFile(),
+					connectionConfig.getIsSelfSigned(), unlimitedRead);
+			}
+			catch (IOException | KeyStoreException | NoSuchAlgorithmException |
+		               CertificateException | KeyManagementException exception) {
+				throw new IOException(exception);
+			}
+			
+		}
 		if (responseStr == null) {
 			throw new IOException("Response code is not OK");
 		}
